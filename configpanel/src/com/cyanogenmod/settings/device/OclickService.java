@@ -281,6 +281,11 @@ public class OclickService extends Service implements
                             injectKey(KeyEvent.KEYCODE_CAMERA);
                         }
                     }
+
+                    Intent keyIntent = new Intent("com.cyanogenmod.device.iuni.ACTION_OCLICK_KEY");
+                    keyIntent.putExtra("key", key);
+                    keyIntent.putExtra("action", action);
+                    sendBroadcast(keyIntent);
                 }
             } else {
                 if (mTapPending) {

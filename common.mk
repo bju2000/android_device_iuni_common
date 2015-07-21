@@ -22,6 +22,11 @@ PRODUCT_PACKAGES += \
     ConfigPanel \
     com.cyanogenmod.keyhandler
 
+PRODUCT_SYSTEM_SERVER_JARS += com.cyanogenmod.keyhandler
+
+# never dexopt the keyhandler
+$(call add-product-dex-preopt-module-config,com.cyanogenmod.keyhandler,disable)
+
 # Recovery
 PRODUCT_PACKAGES += \
-    librecovery_updater_oppo
+    librecovery_updater_iuni

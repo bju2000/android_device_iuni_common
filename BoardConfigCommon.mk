@@ -14,17 +14,17 @@
 # limitations under the License.
 #
 
-BOARD_VENDOR := oppo
+BOARD_VENDOR := iuni
 
 # CM Hardware
-BOARD_HARDWARE_CLASS += device/oppo/common/cmhw
+BOARD_HARDWARE_CLASS += device/iuni/common/cmhw
 
 # MSM Init
-TARGET_INIT_VENDOR_LIB := libinit_msm_oppo
+TARGET_INIT_VENDOR_LIB := libinit_msm_iuni
 
 # QCOM Power
 TARGET_POWERHAL_VARIANT := qcom
 
 # Releasetools
-TARGET_RECOVERY_UPDATER_LIBS := librecovery_updater_oppo
-TARGET_RELEASETOOLS_EXTENSIONS := device/oppo/common
+TARGET_RECOVERY_UPDATER_LIBS := librecovery_updater_iuni
+TARGET_RELEASETOOLS_EXTENSIONS := device/iuni/common
