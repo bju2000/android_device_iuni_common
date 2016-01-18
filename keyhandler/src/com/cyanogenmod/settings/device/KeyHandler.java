@@ -19,14 +19,17 @@ package com.cyanogenmod.settings.device;
 import android.app.ActivityManagerNative;
 import android.app.KeyguardManager;
 import android.content.ActivityNotFoundException;
+import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.res.Resources;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
 import android.hardware.TorchManager;
 import android.media.session.MediaSessionLegacyHelper;
+import android.net.Uri;
 import android.os.Handler;
 import android.os.Message;
 import android.os.PowerManager;
@@ -35,7 +38,9 @@ import android.os.RemoteException;
 import android.os.ServiceManager;
 import android.os.SystemClock;
 import android.os.UserHandle;
+import android.os.Vibrator;
 import android.provider.MediaStore;
+import android.provider.Settings;
 import android.util.Log;
 import android.view.KeyEvent;
 import android.view.WindowManagerGlobal;
@@ -47,6 +52,9 @@ public class KeyHandler implements DeviceKeyHandler {
 
     private static final String TAG = KeyHandler.class.getSimpleName();
     private static final int GESTURE_REQUEST = 1;
+
+    private static final String KEY_GESTURE_HAPTIC_FEEDBACK =
+            "touchscreen_gesture_haptic_feedback";
 
     private static final String ACTION_DISMISS_KEYGUARD =
             "com.android.keyguard.action.DISMISS_KEYGUARD_SECURELY";
@@ -79,19 +87,36 @@ public class KeyHandler implements DeviceKeyHandler {
     private SensorManager mSensorManager;
     private TorchManager mTorchManager;
     private Sensor mProximitySensor;
+    private Vibrator mVibrator;
     WakeLock mProximityWakeLock;
     WakeLock mGestureWakeLock;
+    private int mProximityTimeOut;
+    private boolean mProximityWakeSupported;
 
     public KeyHandler(Context context) {
         mContext = context;
         mPowerManager = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
         mEventHandler = new EventHandler();
-        mSensorManager = (SensorManager) context.getSystemService(Context.SENSOR_SERVICE);
-        mProximitySensor = mSensorManager.getDefaultSensor(Sensor.TYPE_PROXIMITY);
-        mProximityWakeLock = mPowerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,
-                "ProximityWakeLock");
         mGestureWakeLock = mPowerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,
                 "GestureWakeLock");
+
+        final Resources resources = mContext.getResources();
+        mProximityTimeOut = resources.getInteger(
+                com.android.internal.R.integer.config_proximityCheckTimeout);
+        mProximityWakeSupported = resources.getBoolean(
+                com.android.internal.R.bool.config_proximityCheckOnWake);
+
+        if (mProximityWakeSupported) {
+            mSensorManager = (SensorManager) context.getSystemService(Context.SENSOR_SERVICE);
+            mProximitySensor = mSensorManager.getDefaultSensor(Sensor.TYPE_PROXIMITY);
+            mProximityWakeLock = mPowerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,
+                    "ProximityWakeLock");
+        }
+
+        mVibrator = (Vibrator) context.getSystemService(Context.VIBRATOR_SERVICE);
+        if (mVibrator == null || !mVibrator.hasVibrator()) {
+            mVibrator = null;
+        }
     }
 
     private void ensureKeyguardManager() {
@@ -118,7 +143,7 @@ public class KeyHandler implements DeviceKeyHandler {
                 }
             case GESTURE_CIRCLE_SCANCODE:
                 ensureKeyguardManager();
-                String action = null;
+                final String action;
                 mGestureWakeLock.acquire(GESTURE_WAKELOCK_DURATION);
                 if (mKeyguardManager.isKeyguardSecure() && mKeyguardManager.isKeyguardLocked()) {
                     action = MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA_SECURE;
@@ -130,20 +155,25 @@ public class KeyHandler implements DeviceKeyHandler {
                 mPowerManager.wakeUp(SystemClock.uptimeMillis());
                 Intent intent = new Intent(action, null);
                 startActivitySafely(intent);
+                doHapticFeedback();
                 break;
             case GESTURE_SWIPE_DOWN_SCANCODE:
                 dispatchMediaKeyWithWakeLockToMediaSession(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE);
+                doHapticFeedback();
                 break;
             case GESTURE_V_SCANCODE:
                 ensureTorchManager();
                 mGestureWakeLock.acquire(GESTURE_WAKELOCK_DURATION);
                 mTorchManager.toggleTorch();
+                doHapticFeedback();
                 break;
             case GESTURE_LTR_SCANCODE:
                 dispatchMediaKeyWithWakeLockToMediaSession(KeyEvent.KEYCODE_MEDIA_PREVIOUS);
+                doHapticFeedback();
                 break;
             case GESTURE_GTR_SCANCODE:
                 dispatchMediaKeyWithWakeLockToMediaSession(KeyEvent.KEYCODE_MEDIA_NEXT);
+                doHapticFeedback();
                 break;
             }
         }
@@ -158,11 +188,16 @@ public class KeyHandler implements DeviceKeyHandler {
         if (isKeySupported && !mEventHandler.hasMessages(GESTURE_REQUEST)) {
             if (event.getScanCode() == KEY_DOUBLE_TAP && !mPowerManager.isScreenOn()) {
                 mPowerManager.wakeUpWithProximityCheck(SystemClock.uptimeMillis());
+                doHapticFeedback();
                 return true;
             }
             Message msg = getMessageForKeyEvent(event);
-            if (mProximitySensor != null) {
-                mEventHandler.sendMessageDelayed(msg, 200);
+            boolean defaultProximity = mContext.getResources().getBoolean(
+                com.android.internal.R.bool.config_proximityCheckOnWakeEnabledByDefault);
+            boolean proximityWakeCheckEnabled = Settings.System.getInt(mContext.getContentResolver(),
+                    Settings.System.PROXIMITY_ON_WAKE, defaultProximity ? 1 : 0) == 1;
+            if (mProximityWakeSupported && proximityWakeCheckEnabled && mProximitySensor != null) {
+                mEventHandler.sendMessageDelayed(msg, mProximityTimeOut);
                 processEvent(event);
             } else {
                 mEventHandler.sendMessage(msg);
@@ -224,6 +259,17 @@ public class KeyHandler implements DeviceKeyHandler {
             mContext.startActivityAsUser(intent, null, user);
         } catch (ActivityNotFoundException e) {
             // Ignore
+        }
+    }
+
+    private void doHapticFeedback() {
+        if (mVibrator == null) {
+            return;
+        }
+        boolean enabled = Settings.System.getInt(mContext.getContentResolver(),
+                KEY_GESTURE_HAPTIC_FEEDBACK, 1) != 0;
+        if (enabled) {
+            mVibrator.vibrate(50);
         }
     }
 }
